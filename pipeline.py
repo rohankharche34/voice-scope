@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 import tempfile
@@ -43,21 +42,19 @@ class DiarizationError(PipelineError):
     reraise=True,
 )
 def download_audio(url: str, output_dir: Path) -> Path:
-    raw_path = output_dir / "audio.%(ext)s"
+    audio_path = output_dir / "audio.wav"
     cmd = [
         "yt-dlp",
         "--extract-audio",
         "--audio-format", "wav",
         "--audio-quality", "0",
-        "-o", str(raw_path),
-        "--print", "filename",
+        "-o", str(audio_path),
         url,
     ]
     logger.info("Downloading audio from %s", url)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if result.returncode != 0:
         raise DownloadError(f"yt-dlp failed: {result.stderr.strip()}")
-    audio_path = Path(result.stdout.strip())
     if not audio_path.exists():
         raise DownloadError(f"Downloaded file not found: {audio_path}")
     logger.info("Downloaded audio to %s", audio_path)
@@ -121,7 +118,7 @@ def diarize(audio_path: Path) -> list[dict]:
         from pyannote.audio import Pipeline
         pipeline = Pipeline.from_pretrained(
             config.diarization_model,
-            use_auth_token=config.hf_token,
+            token=config.hf_token,
         )
         pipeline.to(torch.device(config.device))
     except Exception as e:
@@ -134,12 +131,12 @@ def diarize(audio_path: Path) -> list[dict]:
         raise DiarizationError(f"Diarization failed: {e}")
 
     segments = []
-    for turn, _, speaker in diarization.itertracks(yield_label=True):
-        segments.append({
-            "speaker": speaker,
-            "start": turn.start,
-            "end": turn.end,
-        })
+    if hasattr(diarization, "itertracks"):
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            segments.append({"speaker": speaker, "start": turn.start, "end": turn.end})
+    elif hasattr(diarization, "speaker_diarization"):
+        for turn, _, speaker in diarization.speaker_diarization.itertracks(yield_label=True):
+            segments.append({"speaker": speaker, "start": turn.start, "end": turn.end})
     logger.info("Diarization produced %d segments", len(segments))
     return segments
 
